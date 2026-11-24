@@ -1,0 +1,11 @@
+{
+  "file_scan_exclusions": ["**/.build", "..."],
+  "lsp": {
+    "sourcekit-lsp": {
+      "binary": {
+        "path": "/usr/bin/env",
+        "arguments": ["python3", "Tools/sourcekit-nested-sources.py"]
+      }
+    }
+  }
+}
