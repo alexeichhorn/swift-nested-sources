@@ -1,4 +1,4 @@
-# NestedSources
+# NestedSources Plugin
 
 A SwiftPM build tool plugin that lets one module contain several files with the same name in different folders.
 
