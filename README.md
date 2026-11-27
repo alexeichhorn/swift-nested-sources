@@ -139,7 +139,7 @@ This works in editors that let you choose the language server binary, such as Ze
    }
    ```
 
-The proxy learns about a new file once indexing has linked it. Let indexing finish before you open a newly added file, or reopen it afterwards.
+The proxy learns about a new file once indexing has linked it. A file opened before then, such as a newly added one, switches over by itself once the link exists, unless it was edited in the meantime; then reopen it.
 
 This repository uses the same setup for its own test target.
 
