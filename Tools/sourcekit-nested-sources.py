@@ -20,13 +20,55 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, Callable
 
 script = Path(__file__).resolve()
 package = next(folder for folder in script.parents if (folder / "Package.swift").is_file())
 # `swiftPM.scratchPath` in `.sourcekit-lsp/config.json`. It is relative to the server's working directory, so `main`
 # starts the server inside the package; the index then lands here wherever the editor was opened.
 scratch = package / ".build/index-build"
+
+
+class OpenFiles:
+    """Keeps each open file under the URI SourceKit-LSP knows it by.
+
+    A file opened before indexing linked it reaches SourceKit-LSP under its original URI, which belongs to no module.
+    Once its symlink exists, the file is reopened under the symlink with the text the editor opened it with. A file
+    edited before then keeps its original URI until the editor reopens it.
+    """
+
+    def __init__(self):
+        # Original URI -> the `didOpen` document of a file SourceKit-LSP has under that URI, or `None` once the editor
+        # edited it, as its text is then unknown here.
+        self.under_original: dict[str, dict[str, Any] | None] = {}
+
+    def uris(self, send: Callable[[Any], None]) -> dict[str, str]:
+        """Maps original URIs to the URIs SourceKit-LSP knows, first reopening files whose symlink appeared."""
+        uris = symlink_uris()
+        for original, document in list(self.under_original.items()):
+            if (symlink := uris.get(original)) is None:
+                continue
+            if document is None:
+                del uris[original]
+                continue
+            send(notification("textDocument/didClose", {"textDocument": {"uri": original}}))
+            send(notification("textDocument/didOpen", {"textDocument": {**document, "uri": symlink}}))
+            del self.under_original[original]
+        return uris
+
+    def track(self, message: dict[str, Any], uris: dict[str, str]):
+        method = message.get("method")
+        if method not in {"textDocument/didOpen", "textDocument/didChange", "textDocument/didClose"}:
+            return
+        document = message["params"]["textDocument"]
+        uri = document["uri"]
+        if method == "textDocument/didOpen":
+            if uri not in uris:
+                self.under_original[uri] = document
+        elif method == "textDocument/didClose":
+            self.under_original.pop(uri, None)
+        elif uri in self.under_original:
+            self.under_original[uri] = None
 
 
 def symlink_uris() -> dict[str, str]:
@@ -53,6 +95,10 @@ def remap(value: Any, uris: dict[str, str]) -> Any:
         else:
             result[key] = remap(item, uris)
     return result
+
+
+def notification(method: str, params: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "method": method, "params": params}
 
 
 def read_message(stream: IO[bytes]) -> dict[str, Any] | None:
@@ -86,10 +132,16 @@ def main():
     assert to_server is not None and from_server is not None
     signal.signal(signal.SIGTERM, lambda *_: server.terminate())
 
+    def send(message: Any):
+        write_message(to_server, message)
+
     def forward_editor_messages():
+        open_files = OpenFiles()
         try:
             while (message := read_message(sys.stdin.buffer)) is not None:
-                write_message(to_server, remap(message, symlink_uris()))
+                uris = open_files.uris(send)
+                open_files.track(message, uris)
+                send(remap(message, uris))
         except (OSError, ValueError, KeyError) as error:
             print(f"sourcekit-nested-sources: forwarding to SourceKit-LSP failed: {error}", file=sys.stderr)
         finally:
